@@ -181,7 +181,6 @@ c = {
 		session.config = conf
 		c._setup()
 	end,
-
 	_setup = function()
 		vim.cmd(
 			string.format(
@@ -207,12 +206,32 @@ c = {
 			)
 		)
 		if session.config.store_selection_keys then
-			vim.cmd(
-				string.format(
-					[[xnoremap <silent>  %s  :lua require('luasnip.util.util').store_selection()<cr>gv"_s]],
-					session.config.store_selection_keys
-				)
-			)
+			local action	= [[:lua require('luasnip.util.util').store_selection()<cr>gv"_s]]
+			local actionMap	= { 
+					x = [[xmap <silent>  %s ]] .. action 
+				,	v = [[vmap <silent>  %s ]] .. action 
+				,	s = [[smap <silent>  %s <C-G>]] .. action
+			}
+			local commandToRun = ""
+			local key = session.config.store_selection_keys
+			if type(key) == "string" then
+				-- Backward compatible config which simply accepts key sequence
+				commandToRun = string.format(actionMap.v, key)
+			elseif type(key) == "table" then
+				if key.x then
+					commandToRun = string.format(actionMap.x, key.x)
+				elseif key.v then 
+					commandToRun = string.format(actionMap.v, key.v)
+				elseif key.s then
+					commandToRun = string.format(actionMap.s, key.s)
+				else
+					error("luasnip: table provided to `store_selection_keys` is invalid, see docs luasnip-variables")
+					return
+				end
+				vim.cmd(commandToRun)
+			else
+				error("luasnip: value provided to `store_selection_keys` is not table or string, see docs luasnip-variables")
+			end
 		end
 	end,
 }
