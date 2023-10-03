@@ -273,6 +273,129 @@ local function wrap_nodes(nodes)
 	end
 end
 
+local SELECT_RAW = "LUASNIP_SELECT_RAW"
+local SELECT_DEDENT = "LUASNIP_SELECT_DEDENT"
+local TM_SELECT = "LUASNIP_TM_SELECT"
+
+local function get_selection()
+	local ok, val = pcall(vim.api.nvim_buf_get_var, 0, SELECT_RAW)
+	if ok then
+		local result = {
+			val,
+			vim.api.nvim_buf_get_var(0, SELECT_DEDENT),
+			vim.api.nvim_buf_get_var(0, TM_SELECT),
+		}
+
+		vim.api.nvim_buf_del_var(0, SELECT_RAW)
+		vim.api.nvim_buf_del_var(0, SELECT_DEDENT)
+		vim.api.nvim_buf_del_var(0, TM_SELECT)
+
+		return unpack(result)
+	end
+	return {}, {}, {}
+end
+
+local function get_min_indent(lines)
+	-- "^(%s*)%S": match only lines that actually contain text.
+	local min_indent = lines[1]:match("^(%s*)%S")
+	for i = 2, #lines do
+		-- %s* -> at least matches
+		local line_indent = lines[i]:match("^(%s*)%S")
+		-- ignore if not matched.
+		if line_indent then
+			-- if no line until now matched, use line_indent.
+			if not min_indent or #line_indent < #min_indent then
+				min_indent = line_indent
+			end
+		end
+	end
+	return min_indent
+end
+
+-- there's probably a better way to do this.
+local function byte_start_to_byte_end(pos)
+	local line = vim.api.nvim_buf_get_lines(0, pos[1], pos[1] + 1, false)
+	-- line[1]: get_lines returns table.
+	-- col may be one past the end (for linebreak)
+	-- byteindex rounds toward end of the multibyte-character.
+	return vim.str_byteindex(
+		line[1] .. " " or "",
+		vim.str_utfindex(line[1] .. " " or "", pos[2])
+	)
+end
+
+--- Intended to be callsed in visual mode 
+local function store_selection()
+
+	local srtPos = vim.fn.getpos(".")
+	local endPos = vim.fn.getpos("v")
+	-- local start_line = math.min(srtPos[2], endPos[2])
+	-- local end_line   = math.max(srtPos[2], endPos[2])
+	local start_col  = math.min(srtPos[3], endPos[3], 0)
+	local end_col    = math.max(srtPos[3], endPos[3], vim.v.maxcol)
+
+	-- Assuming we are in visual mode
+	-- Do not add empty lines before ]]
+	vim.cmd([[noautocmd normal "9y]])
+
+	local lines = {}
+	local chunks = {}
+	if vim.fn.has("nvim-0.9.0") then
+		lines = vim.split(vim.fn.getreg("9"), "\n", { trimempty = false })
+	else
+		lines = vim.fn.getreg("9") 
+	end
+	chunks = lines
+
+	vim.defer_fn(function()
+		vim.fn.setreg("9", "")
+	end, 50)
+
+	-- TODO: [October 03, 2023] This insantiy below should be reworked - @hinell 
+
+	-- init with raw selection.
+	local tm_select, select_dedent = vim.deepcopy(chunks), vim.deepcopy(chunks)
+	-- may be nil if no indent.
+	local min_indent = get_min_indent(lines) or ""
+	-- TM_SELECTED_TEXT contains text from new cursor position(for V the first
+	-- non-whitespace of first line, v and c-v raw) to end of selection.
+	if mode == "V" then
+		tm_select[1] = tm_select[1]:gsub("^%s+", "")
+		-- remove indent from all lines:
+		for i = 1, #select_dedent do
+			select_dedent[i] = select_dedent[i]:gsub("^" .. min_indent, "")
+		end
+	elseif mode == "v" then
+		-- if selection starts inside indent, remove indent.
+		if #min_indent > start_col then
+			select_dedent[1] = lines[1]:gsub(min_indent, "")
+		end
+		for i = 2, #select_dedent - 1 do
+			select_dedent[i] = select_dedent[i]:gsub(min_indent, "")
+		end
+
+		-- remove as much indent from the last line as possible.
+		if #min_indent > end_col then
+			select_dedent[#select_dedent] = ""
+		else
+			select_dedent[#select_dedent] =
+				select_dedent[#select_dedent]:gsub("^" .. min_indent, "")
+		end
+	else
+		-- in block: if indent is in block, remove the part of it that is inside
+		-- it for select_dedent.
+		if #min_indent > start_col then
+			local indent_in_block = min_indent:sub(start_col, #min_indent)
+			for i, line in ipairs(chunks) do
+				select_dedent[i] = line:gsub("^" .. indent_in_block, "")
+			end
+		end
+	end
+	vim.api.nvim_buf_set_var(0, SELECT_RAW, chunks)
+	vim.api.nvim_buf_set_var(0, SELECT_DEDENT, select_dedent)
+	vim.api.nvim_buf_set_var(0, TM_SELECT, tm_select)
+end
+
 local function pos_equal(p1, p2)
 	return p1[1] == p2[1] and p1[2] == p2[2]
 end
